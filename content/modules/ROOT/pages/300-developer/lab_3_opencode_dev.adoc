@@ -28,19 +28,19 @@ git clone $TEMPLATE_URL ~/$APP_NAME && cd ~/$APP_NAME
 opencode
 ----
 
-The template provides three deterministic scripts that OpenCode will call as shell commands:
+The template provides three Ansible playbooks that OpenCode will call, plus the Kustomize manifests they apply:
 
 [cols="1,2,2",options="header"]
 |===
-| Script | What it does | Duration
-| `scripts/git-push.sh` | Creates your personal repo on the Git server and pushes all code | ~30s
-| `scripts/build-image.sh` | Runs a Tekton PipelineRun (git-clone + buildah) | 3–5 min
-| `scripts/gitops-deploy.sh` | Spins up your personal Argo CD instance and deploys the app | 2–3 min
+| Playbook | What it does | Duration
+| `scripts/git-push.yml` | Creates your personal repo on the Git server and pushes all code | ~30s
+| `scripts/build-image.yml` | Applies `pipeline/base` (Kustomize), runs Tekton PipelineRun | 3–5 min
+| `scripts/gitops-deploy.yml` | Applies `gitops/base` (Kustomize ArgoCD), creates Application | 2–3 min
 |===
 
 [TIP]
 ====
-These scripts are also exposed as one-click tasks in the DevSpaces sidebar (rocket icon). OpenCode calls them the same way — the result is identical.
+These playbooks are also exposed as one-click tasks in the DevSpaces sidebar (rocket icon). OpenCode calls them the same way — each task prints named steps so you can follow what is happening.
 ====
 
 ---
@@ -100,21 +100,21 @@ Fix any compile error before continuing. Show the build output.
 
 == Phase 2: Deploy
 
-Once the build succeeds, call the three scripts from AGENTS.md in order:
+Once the build succeeds, run the three Ansible playbooks from AGENTS.md in order:
 
-  bash scripts/git-push.sh $APP_NAME
-  bash scripts/build-image.sh $APP_NAME
-  bash scripts/gitops-deploy.sh $APP_NAME
+  ansible-playbook scripts/git-push.yml
+  ansible-playbook scripts/build-image.yml
+  ansible-playbook scripts/gitops-deploy.yml
 
-Read each script's output. Wait for it to succeed before calling the next.
-If a script fails, read the error and fix the root cause.
+Read each playbook's task output. Wait for it to succeed before running the next.
+If a task fails, the error is shown inline — read it and fix the root cause.
 
 At the end, print:
 - The app route URL
 - The personal Argo CD console URL
 ----
 
-OpenCode will work through both phases automatically, reporting each step. You will see the Dockerfile it generates, the binary being compiled, and the three deploy scripts executing one after the other.
+OpenCode will work through both phases automatically, reporting each step. You will see the Dockerfile it generates, the binary being compiled, and the three Ansible playbooks executing — each one printing named tasks so you can follow exactly what the platform is doing.
 
 ---
 

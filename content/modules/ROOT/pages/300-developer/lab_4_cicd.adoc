@@ -16,13 +16,13 @@ Your Fortune Cookie app is live. Now close the GitOps loop: make a change, push 
  Code change (OpenCode)
        │
        ▼
- git-push.sh       → pushes to personal Git repo
+ git-push.yml       → pushes to personal Git repo
        │
        ▼
- build-image.sh    → Tekton Pipeline: git-clone + buildah → new image in registry
+ build-image.yml    → applies pipeline/base (Kustomize) → Tekton PipelineRun → image built
        │
        ▼
- gitops-deploy.sh  → updates image in deployment.yaml → Argo CD syncs → new pods
+ gitops-deploy.yml  → applies gitops/base (Kustomize) → Argo CD syncs → new pods
        │
        ▼
  Live at https://<app>-<namespace>.apps.<cluster>
@@ -61,13 +61,13 @@ Run the three scripts in order — same as before, no new concepts:
 [source,sh,role=execute]
 ----
 # 1. Push the updated code
-bash scripts/git-push.sh $APP_NAME
+ansible-playbook scripts/git-push.yml
 ----
 
 [source,sh,role=execute]
 ----
 # 2. Rebuild the container image (Tekton PipelineRun, ~3-5 min)
-bash scripts/build-image.sh $APP_NAME
+ansible-playbook scripts/build-image.yml
 ----
 
 [TIP]
@@ -79,7 +79,7 @@ You can watch the Tekton PipelineRun in the OpenShift console:
 [source,sh,role=execute]
 ----
 # 3. Update the image reference and let Argo CD sync
-bash scripts/gitops-deploy.sh $APP_NAME
+ansible-playbook scripts/gitops-deploy.yml
 ----
 
 `gitops-deploy.sh` updates the `image:` field in `deploy/base/deployment.yaml`, commits and pushes it, then Argo CD detects the change and reconciles the deployment automatically.
@@ -130,16 +130,16 @@ echo "https://$(oc get route argocd-server -n ${APP_NAME}-dev -o jsonpath='{.spe
 
 [cols="1,2", options="header"]
 |===
-| Script | Platform action
+| Playbook | Platform action
 
-| `git-push.sh`
+| `git-push.yml`
 | Updated code committed and pushed to your personal Git repo
 
-| `build-image.sh`
-| Tekton cloned the repo, `buildah` rebuilt the image from your `Dockerfile`, pushed to the internal registry
+| `build-image.yml`
+| Applied `pipeline/base` Kustomize manifests; Tekton cloned the repo, `buildah` rebuilt the image, pushed to the internal registry
 
-| `gitops-deploy.sh`
-| Updated `image:` in `deployment.yaml`, pushed to Git. Argo CD detected the commit, applied the manifest, Kubernetes rolled out new pods.
+| `gitops-deploy.yml`
+| Applied `gitops/base` Kustomize manifests; updated `image:` in `deployment.yaml`, pushed to Git. Argo CD detected the commit, reconciled the deployment.
 |===
 
 You made one change. The platform delivered it — zero manual `kubectl apply`, zero interaction with the registry, zero cluster-admin access.
