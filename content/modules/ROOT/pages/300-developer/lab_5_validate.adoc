@@ -53,13 +53,13 @@ requests and limits set exactly as specified in AGENTS.md:
 If any values are missing or incorrect, fix them now and show me the corrected section.
 ----
 
-If OpenCode patches the file:
+If OpenCode patches the file, redeploy:
 
 [source,sh,role=execute]
 ----
-bash scripts/git-push.sh $APP_NAME
-bash scripts/build-image.sh $APP_NAME
-bash scripts/gitops-deploy.sh $APP_NAME
+ansible-playbook scripts/git-push.yml
+ansible-playbook scripts/build-image.yml
+ansible-playbook scripts/gitops-deploy.yml
 ----
 
 == Audit 2: Observability

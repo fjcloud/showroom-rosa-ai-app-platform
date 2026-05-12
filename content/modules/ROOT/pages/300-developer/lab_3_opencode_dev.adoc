@@ -14,17 +14,29 @@ You have a Dev Space, an LLM, and a template repository that encodes your platfo
 OpenCode reads `AGENTS.md` before every prompt. You do not need to repeat platform rules — just describe what you want. The LLM knows the standards it must follow, including the exact Dockerfile template and how to call the deploy scripts.
 ====
 
-== Step 1: Clone the Template and Open OpenCode
+== Step 1: Open the Project and Launch OpenCode
+
+Dev Spaces already cloned the template when you created your workspace — it is in `${PROJECT_SOURCE}`.
+Open a terminal and navigate to it:
 
 [source,sh,role=execute]
 ----
-# Set your app name
-export APP_NAME=fortune-cookie
+cd ${PROJECT_SOURCE}
 
-# Clone the platform template (AGENTS.md, scripts/, opencode.json)
-git clone $TEMPLATE_URL ~/$APP_NAME && cd ~/$APP_NAME
+# Confirm the template files are present
+ls
+----
 
-# Launch OpenCode (interactive TUI)
+.Expected
+[source,console]
+----
+AGENTS.md  deploy/  devfile.yaml  gitops/  opencode.json  pipeline/  scripts/
+----
+
+Launch OpenCode:
+
+[source,sh,role=execute]
+----
 opencode
 ----
 
@@ -124,9 +136,9 @@ Verify your application is live:
 
 [source,sh,role=execute]
 ----
-APP_ROUTE=$(oc get route fortune-cookie -n fortune-cookie-dev \
+APP_ROUTE=$(oc get route $APP_NAME -n ${APP_NAME}-dev \
   -o jsonpath='{.spec.host}' 2>/dev/null)
-ARGOCD_ROUTE=$(oc get route argocd-server -n fortune-cookie-dev \
+ARGOCD_ROUTE=$(oc get route argocd-server -n ${APP_NAME}-dev \
   -o jsonpath='{.spec.host}' 2>/dev/null)
 
 echo "================================================"

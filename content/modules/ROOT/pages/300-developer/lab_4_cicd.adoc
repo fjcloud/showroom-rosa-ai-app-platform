@@ -28,7 +28,7 @@ Your Fortune Cookie app is live. Now close the GitOps loop: make a change, push 
  Live at https://<app>-<namespace>.apps.<cluster>
 ----
 
-You own the code. The three scripts — and the platform behind them — own the delivery.
+You own the code. The three Ansible playbooks — and the platform behind them — own the delivery.
 
 == Step 1: Make a Change with OpenCode
 
@@ -82,7 +82,7 @@ You can watch the Tekton PipelineRun in the OpenShift console:
 ansible-playbook scripts/gitops-deploy.yml
 ----
 
-`gitops-deploy.sh` updates the `image:` field in `deploy/base/deployment.yaml`, commits and pushes it, then Argo CD detects the change and reconciles the deployment automatically.
+`gitops-deploy.yml` updates the `image:` field in `deploy/base/deployment.yaml`, commits and pushes it, then Argo CD detects the change and reconciles the deployment automatically.
 
 == Step 3: Verify Argo CD Synced the Change
 

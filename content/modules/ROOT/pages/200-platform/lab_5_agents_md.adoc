@@ -197,26 +197,31 @@ Expected output:
           value: https://gitpop.apps.sno.msl.cloud
 ----
 
-Update it to your cluster's Git server address:
+Get your cluster's Git server URL and update the devfile:
 
 [source,sh,role=execute]
 ----
-GIT_SERVER=https://$(oc get route gitpop -n gitpop -o jsonpath='{.spec.host}' 2>/dev/null \
-  || echo "gitpop.apps.$(oc get ingresses.config.openshift.io cluster -o jsonpath='{.spec.domain}')")
+GIT_SERVER=https://$(oc get route gitpop -n gitpop \
+  -o jsonpath='{.spec.host}')
+
+echo "Git server: $GIT_SERVER"
 
 sed -i "s|https://gitpop.apps.sno.msl.cloud|${GIT_SERVER}|g" devfile.yaml
-
-echo "GIT_SERVER set to: $GIT_SERVER"
 ----
 
-Commit and push the change:
+Commit and push the change to your fork:
 
 [source,sh,role=execute]
 ----
-git add devfile.yaml
-git commit -m "fix: set GIT_SERVER for this cluster"
+git add devfile.yaml opencode.json
+git commit -m "fix: adapt endpoints for workshop cluster"
 git push
 ----
+
+[NOTE]
+====
+If you are using the shared workshop cluster with the pre-configured defaults, the values already match and no push is required. Share the DevSpaces URL directly from Step 6.
+====
 
 == Step 6: Share the developer launch URL
 

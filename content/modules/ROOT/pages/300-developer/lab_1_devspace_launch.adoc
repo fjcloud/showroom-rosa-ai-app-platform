@@ -20,32 +20,20 @@ OpenShift Dev Spaces provides *cloud-based developer workspaces* — VS Code-com
 
 == Get the Dev Spaces URL
 
-Your instructor will give you the *template repository URL* from the Git server (created by the Platform Engineer in Lab 200-5). Build the Dev Spaces launcher URL:
+Your instructor has already prepared the launch URL for you.
+It points at the platform template on GitHub and creates a workspace from its `devfile.yaml`:
 
-[source,sh,role=execute,subs=attributes]
-----
-export TEMPLATE_URL={template_repo_url}
-export APP_NAME=fortune-cookie
-
-DEVSPACES_URL=$(oc get checluster devspaces \
-  -n openshift-operators \
-  -o jsonpath='{.status.cheURL}')
-
-echo "${DEVSPACES_URL}/#${TEMPLATE_URL}"
-----
-
-.Sample Output
 [source,text,options=nowrap]
 ----
-https://devspaces.apps.rosa-abc12.example.openshiftapps.com/#https://gitpop.example.com/0xabc.../go-app-template
+https://devspaces.apps.<cluster>/#https://github.com/fjcloud/go-app-template
 ----
 
 [NOTE]
 ====
-The `#<template-url>` suffix tells Dev Spaces to clone the Platform Engineer's template and create a workspace from its `devfile.yaml`. The template already contains `AGENTS.md`, `opencode.json`, `scripts/`, and `deploy/base/` — you only need to write the application code.
+The `#<template-url>` suffix tells Dev Spaces to clone the template and create a workspace from its `devfile.yaml` automatically. The workspace comes pre-loaded with `AGENTS.md`, `opencode.json`, `scripts/`, `pipeline/`, `gitops/`, and `deploy/base/` — you only need to write the application code.
 ====
 
-. Open the printed URL in your browser.
+. Open the URL your instructor shared in your browser.
 
 == Log In and Create Your Workspace
 
@@ -74,17 +62,18 @@ This takes approximately 2-3 minutes on first launch. *Subsequent launches are f
 
 . Open a terminal in the workspace (*Terminal → New Terminal* or press kbd:[Ctrl+`]).
 
-. Check that OpenCode was installed by the `postStart` hook:
+. Check that OpenCode and Ansible were installed by the `postStart` hook:
 +
 [source,sh,role=execute]
 ----
-opencode --version
+opencode --version && ansible --version | head -1
 ----
 +
 .Sample Output
 [source,text,options=nowrap]
 ----
-opencode v0.x.x
+opencode 0.x.x
+ansible [core 2.x.x]
 ----
 
 . Verify OpenCode can reach the in-cluster LLM:
@@ -178,6 +167,7 @@ The workspace comes pre-configured via `opencode.json`:
 [source,sh,role=execute]
 ----
 opencode --version && \
+ansible --version | head -1 && \
 curl -s http://qwen36-predictor.llm-inference.svc.cluster.local:8080/v1/models | \
   python3 -c "import sys,json; m=json.load(sys.stdin); print('LLM ready:', m['data'][0]['id'])"
 ----
@@ -185,10 +175,11 @@ curl -s http://qwen36-predictor.llm-inference.svc.cluster.local:8080/v1/models |
 .Expected Output
 [source,text,options=nowrap]
 ----
-1.14.x
+opencode 0.x.x
+ansible [core 2.x.x]
 LLM ready: qwen36
 ----
 
-Your Dev Space is running and connected to the in-cluster LLM. ✓
+Your Dev Space is running, tools are installed, and the LLM is reachable. ✓
 
 ➡️ Move on to *Lab 3: Build and Deploy with OpenCode*.
