@@ -1,0 +1,154 @@
+= Build and Deploy with OpenCode
+
+You have a Dev Space, an LLM, and a template repository that encodes your platform's rules in `AGENTS.md`. You will use two focused OpenCode sessions to go from zero to a running application on OpenShift.
+
+[NOTE]
+====
+*Estimated time:* 30 minutes +
+*Persona:* Developer +
+*What you build:* A Fortune Cookie web application in Go — generated, built with Tekton, and deployed via your own Argo CD instance
+====
+
+[TIP]
+====
+OpenCode reads `AGENTS.md` before every prompt. You do not need to repeat platform rules — just describe what you want. The LLM knows the standards it must follow, including the exact Dockerfile template and how to call the deploy scripts.
+====
+
+== Step 1: Clone the Template and Open OpenCode
+
+[source,sh,role=execute]
+----
+# Set your app name
+export APP_NAME=fortune-cookie
+
+# Clone the platform template (AGENTS.md, scripts/, opencode.json)
+git clone $TEMPLATE_URL ~/$APP_NAME && cd ~/$APP_NAME
+
+# Launch OpenCode (interactive TUI)
+opencode
+----
+
+The template provides three deterministic scripts that OpenCode will call as shell commands:
+
+[cols="1,2,2",options="header"]
+|===
+| Script | What it does | Duration
+| `scripts/git-push.sh` | Creates your personal repo on the Git server and pushes all code | ~30s
+| `scripts/build-image.sh` | Runs a Tekton PipelineRun (git-clone + buildah) | 3–5 min
+| `scripts/gitops-deploy.sh` | Spins up your personal Argo CD instance and deploys the app | 2–3 min
+|===
+
+[TIP]
+====
+These scripts are also exposed as one-click tasks in the DevSpaces sidebar (rocket icon). OpenCode calls them the same way — the result is identical.
+====
+
+---
+
+== Session 1: Plan
+
+The `plan` agent is read-only. It analyses the request and produces a detailed implementation plan *without writing any files*. Use it first to surface design decisions and let OpenCode internalize `AGENTS.md`.
+
+Type this prompt in OpenCode:
+
+[source,text,role=execute]
+----
+/plan
+
+I want a Fortune Cookie web application in Go.
+
+The app serves:
+- GET /   — an HTML page that displays a random fortune cookie message
+            (hard-code at least 10 messages in a slice)
+- GET /healthz — returns {"status":"ok"} for Kubernetes health probes
+
+Read AGENTS.md and produce a complete implementation plan:
+- File list and purpose of each file
+- HTTP handler logic
+- Dockerfile stages (follow the template in AGENTS.md exactly)
+- Deploy steps using the three scripts
+
+Do not write any code yet. Only plan.
+----
+
+Review the plan. Adjust if needed. When satisfied, proceed to Session 2.
+
+---
+
+== Session 2: Build and Deploy
+
+This single session does everything: generates code, verifies the local build, then calls the deploy scripts in order. Start a new session (`Ctrl+N`):
+
+[source,text,role=execute]
+----
+/build
+
+Implement the Fortune Cookie application following AGENTS.md strictly.
+
+== Phase 1: Generate code
+
+Generate these files:
+1. main.go       — HTTP server on :8080, / (HTML fortune) and /healthz handlers
+2. go.mod        — module: fortune-cookie, go 1.22
+3. Dockerfile    — use the exact two-stage template from AGENTS.md
+                   (ubi9/go-toolset builder → ubi9/ubi-minimal runtime, USER 1001)
+
+After writing every file, run:
+  CGO_ENABLED=0 go build -buildvcs=false -o /dev/null .
+
+Fix any compile error before continuing. Show the build output.
+
+== Phase 2: Deploy
+
+Once the build succeeds, call the three scripts from AGENTS.md in order:
+
+  bash scripts/git-push.sh $APP_NAME
+  bash scripts/build-image.sh $APP_NAME
+  bash scripts/gitops-deploy.sh $APP_NAME
+
+Read each script's output. Wait for it to succeed before calling the next.
+If a script fails, read the error and fix the root cause.
+
+At the end, print:
+- The app route URL
+- The personal Argo CD console URL
+----
+
+OpenCode will work through both phases automatically, reporting each step. You will see the Dockerfile it generates, the binary being compiled, and the three deploy scripts executing one after the other.
+
+---
+
+== Checkpoint
+
+Verify your application is live:
+
+[source,sh,role=execute]
+----
+APP_ROUTE=$(oc get route fortune-cookie -n fortune-cookie-dev \
+  -o jsonpath='{.spec.host}' 2>/dev/null)
+ARGOCD_ROUTE=$(oc get route argocd-server -n fortune-cookie-dev \
+  -o jsonpath='{.spec.host}' 2>/dev/null)
+
+echo "================================================"
+echo " App:    https://${APP_ROUTE}"
+echo " ArgoCD: https://${ARGOCD_ROUTE}"
+echo "================================================"
+
+curl -sk https://${APP_ROUTE}/healthz
+----
+
+Expected:
+
+[source,json]
+----
+{"status":"ok"}
+----
+
+Open both URLs in your browser:
+
+* The app URL shows a random fortune cookie message
+* The Argo CD console shows your `fortune-cookie` Application in *Synced / Healthy* state — this is *your* Argo CD instance, scoped entirely to your project
+
+image::cicd-gitops.png[Developer GitOps Pipeline, align="center"]
+
+➡️ Move on to *Lab 4: Ship It — Validate the GitOps Loop*.

@@ -1,0 +1,126 @@
+= Install Platform Operators
+
+In this lab, you will install all six platform operators your workshop infrastructure needs using Kustomize overlays from the https://github.com/redhat-cop/gitops-catalog[Red Hat GitOps Catalog, window=_blank] and the https://github.com/fjcloud/opencode-devspace[opencode-devspace, window=_blank] repository.
+
+Declaring operator subscriptions as Kustomize manifests — rather than clicking through OperatorHub — is how a Platform Engineer manages operator lifecycle at scale: reproducible, auditable, and GitOps-friendly.
+
+[NOTE]
+====
+*Estimated time:* 5 minutes active + ~20 minutes background installation +
+*Persona:* Platform Engineer +
+*Fire and forget:* Trigger all installs, then move immediately to Lab 3 while they complete.
+====
+
+== What Gets Installed
+
+[cols="1,2,1", options="header"]
+|===
+| Operator | Purpose | Source
+
+| *Red Hat OpenShift AI (RHOAI)*
+| Manages AI/ML workloads; provides KServe for LLM serving.
+| opencode-devspace
+
+| *NVIDIA GPU Operator*
+| Installs NVIDIA drivers, container toolkit, and device plugin on GPU nodes.
+| opencode-devspace
+
+| *Node Feature Discovery (NFD)*
+| Labels nodes with hardware features (`nvidia.com/gpu.present=true`). Required by GPU Operator.
+| opencode-devspace
+
+| *Red Hat OpenShift Dev Spaces*
+| Manages developer workspaces (cloud IDEs).
+| opencode-devspace
+
+| *OpenShift GitOps* (Argo CD)
+| Installs the operator so developers can create their own Argo CD instance per project.
+| gitops-catalog
+
+| *OpenShift Pipelines* (Tekton)
+| Container image build engine — each developer runs Tekton pipelines in their own namespace.
+| gitops-catalog
+|===
+
+[TIP]
+====
+Developers deploy their own Argo CD instance inside their project namespace — they never touch `openshift-gitops`. Your only job here is to ensure the operators are available cluster-wide.
+====
+
+== Step 1: Install AI & Dev Spaces Operators
+
+[source,sh,role=execute]
+----
+oc apply -k https://github.com/fjcloud/opencode-devspace/deploy/prereq/operator
+----
+
+.Sample Output
+[source,text,options=nowrap]
+----
+namespace/openshift-nfd created
+namespace/nvidia-gpu-operator created
+namespace/redhat-ods-operator created
+operatorgroup.operators.coreos.com/nfd created
+operatorgroup.operators.coreos.com/gpu-operator-group created
+operatorgroup.operators.coreos.com/rhods-operator created
+subscription.operators.coreos.com/devspaces created
+subscription.operators.coreos.com/nfd created
+subscription.operators.coreos.com/gpu-operator-certified created
+subscription.operators.coreos.com/rhods-operator created
+----
+
+== Step 2: Install GitOps & Pipelines Operators
+
+Using the https://github.com/redhat-cop/gitops-catalog[Red Hat GitOps Catalog, window=_blank] — a community-maintained library of ready-to-use Kustomize overlays for OpenShift operators:
+
+[source,sh,role=execute]
+----
+# OpenShift GitOps (Argo CD) — latest stable channel
+oc apply -k https://github.com/redhat-cop/gitops-catalog/openshift-gitops-operator/operator/overlays/latest
+
+# OpenShift Pipelines (Tekton) — latest stable channel
+oc apply -k https://github.com/redhat-cop/gitops-catalog/openshift-pipelines-operator/overlays/latest
+----
+
+.Sample Output
+[source,text,options=nowrap]
+----
+subscription.operators.coreos.com/openshift-gitops-operator created
+subscription.operators.coreos.com/openshift-pipelines-operator created
+----
+
+== Step 3: Start Background Health Checks
+
+Kick off watches for all six operators in the background, then move on immediately:
+
+[source,sh,role=execute]
+----
+for check in \
+  "openshift-operators:devspaces-operator:Dev Spaces" \
+  "openshift-nfd:nfd-controller-manager:NFD" \
+  "nvidia-gpu-operator:gpu-operator:GPU Operator" \
+  "redhat-ods-operator:rhods-operator:OpenShift AI" \
+  "openshift-gitops:openshift-gitops-server:GitOps (Argo CD)" \
+  "openshift-pipelines:tekton-pipelines-controller:Pipelines (Tekton)"; do
+  IFS=: read ns dep label <<< "$check"
+  (
+    oc wait deployment/${dep} -n ${ns} \
+      --for=condition=Available --timeout=600s 2>/dev/null &&
+    echo "  ✅  ${label} ready"
+  ) &
+done
+
+echo "All operator checks running in background — move on to Lab 3."
+----
+
+== What is Happening Under the Hood
+
+OLM (Operator Lifecycle Manager) resolves each `Subscription` against the operator registry, generates an `InstallPlan`, installs CRDs and RBAC, then deploys the operator pod:
+
+----
+Subscription → InstallPlan → CRDs → RBAC → Operator Pod → Succeeded
+----
+
+Each operator registers new Kubernetes resource types you will use in subsequent labs: `InferenceService`, `CheCluster`, `ClusterPolicy`, `NodeFeatureDiscovery`, `ArgoCD`, `TektonConfig`.
+
+➡️ Move immediately to *Lab 3: Discover OpenShift AI* while operators install in the background.

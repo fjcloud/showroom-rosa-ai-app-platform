@@ -1,0 +1,189 @@
+= Discover OpenShift AI
+
+While the operators install in the background, use this time to explore the *Red Hat OpenShift AI (RHOAI)* interface and understand the model serving concepts you will apply in the next lab. This is the control plane through which you manage, serve, and monitor AI models on your cluster.
+
+[NOTE]
+====
+*Estimated time:* 15 minutes +
+*Persona:* Platform Engineer +
+This lab is conceptual + exploration. Operators are still installing in the background — that is intentional.
+====
+
+== What is OpenShift AI?
+
+Red Hat OpenShift AI (formerly RHODS — Red Hat OpenShift Data Science) is a platform for building and serving AI-powered applications on OpenShift. In this workshop, you use a subset of its capabilities:
+
+[cols="1,2", options="header"]
+|===
+| Component | Role
+
+| *RHOAI Operator*
+| Manages the lifecycle of all RHOAI components on the cluster
+
+| *DataScienceCluster*
+| A single CRD that enables/disables RHOAI subsystems. You will enable only Model Serving.
+
+| *KServe*
+| The model serving framework. Manages `InferenceService` objects — each one is a deployed model.
+
+| *ServingRuntime*
+| Defines how a model runs: which container image, which arguments, which hardware (GPU).
+
+| *InferenceService*
+| The running model endpoint. Like a Deployment, but specialized for ML models with autoscaling.
+|===
+
+== The Model Serving Architecture
+
+[source]
+----
+ Platform Engineer
+        │
+        ▼
+ InferenceService (CRD)
+        │  "Serve Qwen3.6 with vLLM on GPU"
+        ▼
+ ServingRuntime (CRD)
+        │  "Use vLLM container, args: --model, --reasoning-parser=qwen3..."
+        ▼
+ Predictor Pod (GPU node)
+        │  vLLM process serving Qwen3.6 weights from PVC
+        ▼
+ REST API  →  POST /v1/chat/completions
+              (100% OpenAI-compatible)
+----
+
+The key insight: *OpenAI-compatible API surface*. Any code or tool written for the OpenAI API — LangChain, LlamaIndex, OpenCode, curl — works without modification against your in-cluster model. The only thing that changes is the `baseURL`.
+
+== Open the OpenShift AI Dashboard
+
+. In the OpenShift Web Console, click the *Application Launcher* (grid icon, top right) and look for *Red Hat OpenShift AI*.
++
+[NOTE]
+====
+The dashboard link may not appear yet if the RHOAI operator is still installing. Check back in a few minutes. You can also check the install status: +
+`oc get csv -n redhat-ods-operator`
+====
+
+. When the dashboard loads, explore the left navigation:
+** *Data Science Projects* — namespaced workspaces for ML teams
+** *Models and model servers* — where `InferenceService` objects are created and monitored
+** *Settings → Serving runtimes* — the list of available `ServingRuntime` templates
+
+== Understanding KServe vs. Traditional Deployments
+
+Why use `InferenceService` instead of a plain Kubernetes `Deployment`?
+
+[cols="1,1,1", options="header"]
+|===
+| Feature | Standard Deployment | KServe InferenceService
+
+| Scaling metric
+| CPU / Memory
+| Request concurrency, tokens/sec, queue length
+
+| GPU management
+| Manual toleration + node selector
+| Automatic via ServingRuntime
+
+| Multi-model serving
+| One Deployment per model
+| Shared serving runtimes
+
+| Metrics
+| Generic k8s metrics
+| Model-specific: tokens/sec, latency percentiles, TTFT
+
+| Model storage
+| ConfigMap / Secret
+| PVC, S3, HuggingFace Hub, OCI registries
+|===
+
+== The OpenAI-Compatible API: Why It Matters
+
+The `InferenceService` you will deploy exposes a REST API identical to OpenAI's:
+
+[source,sh]
+----
+# This works against openai.com:
+curl https://api.openai.com/v1/chat/completions \
+  -H "Authorization: Bearer $OPENAI_KEY" \
+  -d '{"model": "gpt-4o", "messages": [{"role": "user", "content": "Hello"}]}'
+
+# This works against your in-cluster Qwen3.6 (same JSON, same endpoint path):
+curl http://qwen36-predictor.llm-inference.svc.cluster.local:8080/v1/chat/completions \
+  -d '{"model": "qwen36", "messages": [{"role": "user", "content": "Hello"}]}'
+----
+
+This means:
+
+* Developers use standard OpenAI client libraries in their apps — no vendor lock-in
+* OpenCode (the AI coding assistant) needs only a `baseURL` change to use the in-cluster model
+* You can benchmark in-cluster vs. cloud LLMs using identical code
+
+== Qwen3.6: The Model You Are Deploying
+
+[cols="1,2", options="header"]
+|===
+| Property | Value
+
+| Model family
+| Alibaba Qwen3 (通义千问3) — a Chinese-developed, open-weight model
+
+| Variant
+| Qwen3.6-35B-A3B — 35B total parameters, 3.7B active (Mixture of Experts)
+
+| Quantization
+| AWQ 4-bit — fits in 48 GB VRAM with headroom
+
+| Serving engine
+| vLLM — high-throughput inference with continuous batching
+
+| Context window
+| 262,144 tokens (~500 pages)
+
+| Special capability
+| Thinking/reasoning mode (`--reasoning-parser=qwen3`) and tool calling
+
+| HuggingFace ID
+| `cyankiwi/Qwen3.6-35B-A3B-AWQ-4bit`
+|===
+
+[TIP]
+====
+*Why Qwen3.6?* It is one of the few open-weight models that combines strong reasoning (for the plan agent) with strong code generation (for the build agent) in a package that fits on a single consumer-grade GPU. The workshop's Fortune Cookie app and the `AGENTS.md` rulebook both benefit from its bilingual (Chinese/English) strengths.
+====
+
+== ✅ Checkpoint: Verify Operators Are Ready
+
+Now is the time to verify the background operator installations from Lab 2 have completed:
+
+[source,sh,role=execute]
+----
+oc wait deployment/devspaces-operator \
+  -n openshift-operators --for=condition=Available --timeout=300s
+oc wait deployment/nfd-controller-manager \
+  -n openshift-nfd --for=condition=Available --timeout=300s
+oc wait deployment/gpu-operator \
+  -n nvidia-gpu-operator --for=condition=Available --timeout=300s
+oc wait deployment/rhods-operator \
+  -n redhat-ods-operator --for=condition=Available --timeout=300s
+----
+
+.Expected Output
+[source,text,options=nowrap]
+----
+deployment.apps/devspaces-operator condition met
+deployment.apps/nfd-controller-manager condition met
+deployment.apps/gpu-operator condition met
+deployment.apps/rhods-operator condition met
+----
+
+All four operators are running. ✓
+
+[WARNING]
+====
+If any `wait` times out, check the pod status: `oc get pods -n <namespace>`. Common causes: image pull throttling (wait and retry), or the OLM CatalogSource is syncing (wait 2-3 min and retry).
+====
+
+➡️ Move on to *Lab 4: Deploy LLM as a Service*.

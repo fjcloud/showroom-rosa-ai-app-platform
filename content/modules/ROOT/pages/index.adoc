@@ -1,16 +1,93 @@
-= Building a Modern Application Platform with AWS & ROSA 
+= AI-Powered Developer Platform on ROSA
 
-Welcome to the Building a Modern Application Platform workshop. In this workshop you will learn the building blocks of modern application platform and leverage Amazon Web Services (AWS) and Red Hat OpenShift Service on AWS (ROSA) to build a modern application platform. 
+Welcome to the *AI-Powered Developer Platform on ROSA* workshop. In this half-day hands-on lab, you will learn how Red Hat OpenShift Service on AWS (ROSA) provides the perfect foundation for modern, AI-assisted software delivery — from running GPU-backed Large Language Models as a managed service, to giving every developer an intelligent cloud IDE that generates, deploys, and audits their applications automatically.
 
-*Who this workshop is for:* This workshop is aimed at Platform Engineers, DevOps Engineers, Cloud Operations, Architects, and Developers that want to learn what makes a modern application platform, and how they can leverage cloud services to streamline the delivery and operations of their application platforms.
+== Who This Workshop Is For
 
-*What to expect:* During the workshop, we will take you through a series of hands on exercises to help you understand some of the concepts of modern application platforms. Attendees will learn:
+This workshop is designed for two complementary personas that will work through the labs together:
 
-- How to deploy and/or access newly deployed Red Hat OpenShift Service on AWS (ROSA) clusters
-- Complete Day 2 operations tasks including: configuring node and cluster scaling policies, configuring managed upgrades, configuring single-sign-on for the cluster using Amazon Cognito, and forwarding logs to Amazon CloudWatch.
-- Deploy an application that uses AWS IAM Roles for Service Accounts and AWS STS to connect to an Amazon DynamoDB table.
-- Make an application on OpenShift scalable and resistant to node failures and upgrades
-- Deploy an application using CI/CD tooling, including OpenShift GitOps and Source-to-Image, and use labels for deterministic app placement on nodes.
-- Learn how to use OpenShift Service Mesh for application observability and tracing
+[cols="1,1", options="header"]
+|===
+| Persona | Role in This Workshop
 
-After completing this workshop, attendees will have a comprehensive understanding of key concepts related to architecting modern cloud application platforms and will have gained hands-on experience implementing key concepts directly within the lab's provided AWS infrastructure.
+| *Platform Engineer*
+| Deploys ROSA infrastructure, provisions scalable GPU capacity, deploys an LLM as a Service using OpenShift AI, and sets the developer platform conventions — all without writing a runbook.
+
+| *Developer*
+| Launches a cloud IDE (OpenShift Dev Spaces), uses an AI coding assistant (OpenCode) backed by the in-cluster LLM, generates and deploys a real application, then validates it against platform rules — all without leaving the browser.
+|===
+
+== What You Will Build
+
+By the end of this workshop, you will have deployed a complete AI developer platform on ROSA and shipped a real application through it:
+
+image::architecture-overview.png[Architecture Overview, align="center"]
+
+=== Platform Engineer Track
+* A scalable *GPU machine pool* on ROSA — autoscaled via OCM, no manual capacity planning
+* *OpenShift AI (RHOAI)* with KServe serving *Qwen3.6-35B* (a state-of-the-art reasoning model) via a fully *OpenAI-compatible REST API*
+* *OpenShift Dev Spaces* — a browser-based cloud IDE pre-configured for every developer
+* *AGENTS.md* — a machine-readable rulebook that makes OpenCode enforce your platform conventions automatically
+* A *Go application template* — the "golden template" developers clone to start new projects
+* *OpenShift GitOps* (Argo CD) and *OpenShift Pipelines* (Tekton) — GitOps delivery infrastructure, ready for teams
+
+=== Developer Track
+* A personal Git repository — provisioned in seconds via the *Git server*, no GitHub account needed
+* A complete *Fortune Cookie application* generated live by OpenCode + Qwen3.6: Go binary, web UI, Kustomize manifests
+* The app built and deployed automatically via *OpenShift Pipelines* and *Argo CD*
+* Platform compliance validated — and auto-fixed — by the same LLM that wrote the code
+
+== Learning Outcomes
+
+After completing this workshop, you will understand:
+
+* How ROSA's managed machine pools and autoscaling reduce GPU infrastructure toil
+* How OpenShift AI (KServe + vLLM) provides a scalable, OpenAI-compatible LLM API on your own cluster
+* How `AGENTS.md` shifts platform governance from documentation to code
+* How OpenShift Dev Spaces + OpenCode creates an AI-augmented developer experience that requires no local setup
+* How OpenShift Pipelines and Argo CD form a complete GitOps delivery pipeline from a single repository
+* How to measure and govern LLM usage with NVIDIA DCGM dashboards and OpenShift AI model metrics
+
+== Workshop Structure
+
+[cols="1,3,1", options="header"]
+|===
+| Module | Topic | Duration
+
+| *100*
+| Access & ROSA Overview
+| 20 min
+
+| *200*
+| Platform Engineer: Deploy LLM as a Service & Developer Platform
+| 75 min
+
+| *300*
+| Developer: Build & Ship with AI
+| 55 min
+
+| *400*
+| LLM Observability & Governance
+| 20 min
+
+| —
+| Conclusion & Q&A
+| 10 min
+|===
+
+[TIP]
+====
+*Fire-and-forget timing:* Long operations (GPU node provisioning, operator installation, model download) are triggered early and run in the background while you work on other labs. By the time you need the LLM, it will be ready.
+====
+
+== Prerequisites
+
+You will need:
+
+* A web browser
+* Access to the lab environment (credentials provided by your instructor)
+* A terminal — provided inside your Dev Space (no local install required)
+
+Everything else — `rosa`, `oc`, `kubectl`, the OpenCode CLI, the Git server client — is either pre-installed in the lab environment or installed during the workshop steps.
+
+Let's get started!

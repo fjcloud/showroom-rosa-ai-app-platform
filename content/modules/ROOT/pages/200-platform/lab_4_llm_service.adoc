@@ -1,0 +1,196 @@
+= Deploy LLM as a Service
+
+With all four operators running, you can now create the *instances* (the actual running services) and deploy *Qwen3.6 as an OpenAI-compatible InferenceService*. Two commands: one for the platform instances, one for the model. Then move on — the model will download while you work on the next lab.
+
+[NOTE]
+====
+*Estimated time:* 10 minutes active + ~15 minutes background download +
+*Persona:* Platform Engineer +
+*Fire and forget:* Trigger both applies, then move to Lab 5. The model will be ready before the Developer module begins.
+====
+
+== Model Serving Architecture
+
+image::model-serving-architecture.png[Model Serving Architecture, align="center"]
+
+The Qwen3.6 `InferenceService` uses KServe to orchestrate vLLM on a dedicated GPU node. KServe's autoscaler monitors request concurrency and scales pods between 0 and 3 replicas automatically.
+
+== Step 1: Create Platform Instances
+
+This step instantiates the operator CRDs: the `DataScienceCluster` for RHOAI, the `CheCluster` for Dev Spaces, the `ClusterPolicy` and `NodeFeatureDiscovery` for GPU management, and the DCGM (GPU monitoring) dashboard.
+
+[source,sh,role=execute]
+----
+oc apply -k https://github.com/fjcloud/opencode-devspace/deploy/prereq/instance
+----
+
+.Sample Output
+[source,text,options=nowrap]
+----
+datasciencecluster.datasciencecluster.opendatahub.io/default-dsc created
+dscinitializatiton.dscinitialization.opendatahub.io/default-dsci created
+checluster.org.eclipse.che/devspaces created
+nodefeaturediscovery.nfd.openshift.io/nfd-instance created
+clusterpolicy.nvidia.com/gpu-cluster-policy created
+configmap/nvidia-dcgm-exporter-dashboard created
+----
+
+=== What Is Created
+
+[cols="1,2", options="header"]
+|===
+| Object | Purpose
+
+| `DataScienceCluster`
+| Enables KServe model serving (with `RawDeployment` mode — no serverless infrastructure needed)
+
+| `DSCInitialization`
+| Configures shared components: monitoring namespace, certificates, dashboard
+
+| `CheCluster`
+| Configures Dev Spaces: user workspace namespaces, PVC per-user, inactivity timeout 1800s
+
+| `NodeFeatureDiscovery`
+| Starts the NFD daemon — it will label the GPU node with hardware attributes once it joins
+
+| `ClusterPolicy`
+| Triggers NVIDIA GPU Operator to install drivers, CUDA toolkit, and device plugin on GPU nodes
+
+| `ConfigMap` (DCGM dashboard)
+| Loads the NVIDIA DCGM Exporter dashboard into the OpenShift monitoring console
+|===
+
+=== Wait for Core Instances
+
+[source,sh,role=execute]
+----
+oc wait checluster/devspaces \
+  -n openshift-operators \
+  --for=jsonpath='{.status.chePhase}'=Active \
+  --timeout=300s
+
+oc wait datasciencecluster/default-dsc \
+  --for=condition=Ready \
+  --timeout=300s
+----
+
+.Expected Output
+[source,text,options=nowrap]
+----
+checluster.org.eclipse.che/devspaces condition met
+datasciencecluster.datasciencecluster.opendatahub.io/default-dsc condition met
+----
+
+== Step 2: Deploy the LLM InferenceService
+
+This creates:
+* The `llm-inference` namespace
+* An 80 Gi PVC for the model weight cache
+* The `ServingRuntime` (vLLM container configuration)
+* The `InferenceService` itself — this triggers the first model download
+
+[source,sh,role=execute]
+----
+oc apply -k https://github.com/fjcloud/opencode-devspace/deploy/prereq/inference
+----
+
+.Sample Output
+[source,text,options=nowrap]
+----
+namespace/llm-inference created
+persistentvolumeclaim/qwen36-model-cache created
+servingruntime.serving.kserve.io/vllm-cuda-qwen created
+inferenceservice.serving.kserve.io/qwen36 created
+----
+
+=== Understanding the InferenceService Autoscaling
+
+The `InferenceService` is configured for elastic scaling across multiple GPU nodes:
+
+[source,yaml]
+----
+spec:
+  predictor:
+    minReplicas: 1      # <1>
+    maxReplicas: 3      # <2>
+    scaleTarget: 1      # <3>
+    scaleMetric: concurrency  # <4>
+    model:
+      storageUri: "pvc://qwen36-model-cache"
+      runtime: vllm-cuda-qwen
+    resources:
+      limits:
+        nvidia.com/gpu: "1"
+    tolerations:
+    - key: nvidia.com/gpu  # <5>
+      operator: Exists
+      effect: NoSchedule
+----
+
+<1> Always keep at least one replica warm (no cold start during the workshop)
+<2> Scale up to 3 replicas if concurrency exceeds the target — each replica requires one GPU node
+<3> Scale up when more than 1 concurrent request is in-flight
+<4> Scale metric: number of concurrent inference requests (not CPU/memory)
+<5> Tolerate the GPU taint — only inference pods land on GPU nodes
+
+When ROSA's cluster autoscaler sees the pending predictor pods (requiring GPUs that don't exist yet), it provisions new nodes from the `gpu` machine pool. This is the *full elastic loop*: app demand → KServe scales pods → ROSA scales GPU nodes → AWS provisions EC2 instances.
+
+=== The vLLM Serving Arguments
+
+The `ServingRuntime` passes key arguments to vLLM:
+
+[source,yaml]
+----
+args:
+  - --model=/opt/models        # model weights from PVC
+  - --reasoning-parser=qwen3  # enable Qwen3 thinking mode
+  - --tool-call-parser=qwen3_coder  # enable tool/function calling
+  - --max-model-len=262144     # 256k token context window
+  - --gpu-memory-utilization=0.95  # use 95% of GPU VRAM
+  - --language-model-only      # disable vision modalities
+----
+
+=== First Start: Model Download
+
+The first time the predictor pod starts, it downloads model weights from HuggingFace Hub to the PVC. This takes approximately 10-15 minutes (the model is ~20 GB compressed).
+
+[source,sh,role=execute]
+----
+# Watch the download progress (run in background, move on)
+oc logs -f -n llm-inference \
+  $(oc get pod -n llm-inference -l serving.kserve.io/inferenceservice=qwen36 \
+    -o name 2>/dev/null | head -1) 2>/dev/null &
+echo "Model download logs streaming in background. Move on to Lab 5."
+----
+
+[NOTE]
+====
+*Subsequent starts are instant.* The weights are cached on the PVC (`qwen36-model-cache`). Only the very first start downloads them. In production, you would pre-seed the PVC before go-live — the `min-replicas: 1` in the machine pool ensures one node is always warm and the first download happens during setup, not during peak load.
+====
+
+== Verify the Endpoint Will Be Available
+
+[source,sh,role=execute]
+----
+oc get inferenceservice -n llm-inference
+----
+
+.Sample Output (while downloading)
+[source,text,options=nowrap]
+----
+NAME     URL                                                    READY   PREV   LATEST   AGE
+qwen36   http://qwen36-predictor.llm-inference.svc.cluster.local   False   0      100      2m
+----
+
+The `READY` column shows `False` while the model loads. It will become `True` when the predictor is serving requests. You will verify this at the end of Lab 5.
+
+== Summary
+
+You have now triggered the deployment of:
+
+* ✅ `DataScienceCluster` — RHOAI model serving enabled
+* ✅ `CheCluster` — Dev Spaces ready for developer workspaces
+* ✅ `InferenceService/qwen36` — Qwen3.6 downloading, will be OpenAI-compatible when ready
+* ✅ NVIDIA GPU monitoring dashboard — auto-loaded into OpenShift console
+
+➡️ Move immediately to *Lab 5: Define Developer Conventions*. Check the InferenceService status at the end of that lab.

@@ -1,0 +1,662 @@
+= Define Developer Conventions
+
+As a Platform Engineer, your highest-value contribution to developer productivity is a *template repository* that every developer workspace inherits automatically. It contains:
+
+* `AGENTS.md` — the rulebook OpenCode reads before every session: platform conventions, the exact Dockerfile template, and instructions for calling the deploy scripts
+* `scripts/` — deterministic deploy scripts that OpenCode calls as shell commands (and that developers can also click as one-click Tasks in DevSpaces)
+* `deploy/base/` — placeholder Kustomize manifests; the LLM only needs to generate the application code
+* `devfile.yaml` — workspace definition: installs OpenCode, exposes scripts as named Tasks
+* `opencode.json` — LLM configuration pointing at the in-cluster Qwen3.6
+
+The key boundary: OpenCode generates code (`main.go`, `go.mod`, `Dockerfile`) guided by `AGENTS.md`. The scripts handle all platform operations.
+
+[NOTE]
+====
+*Estimated time:* 20 minutes +
+*Persona:* Platform Engineer +
+*Deliverable:* Template repository published to the Git server; developer launch URL ready to share
+====
+
+== Step 1: Create the Template Repository
+
+[source,sh,role=execute]
+----
+mkdir ~/go-app-template && cd ~/go-app-template
+mkdir -p scripts
+git init -b main
+git config user.email "platform@workshop.local"
+git config user.name "Platform Engineer"
+----
+
+== Step 2: Write the Deploy Scripts
+
+Three focused scripts cover the full deploy lifecycle. They read `APP_NAME` from the environment (set by the devfile) and are safe to re-run.
+
+=== scripts/git-push.sh
+
+Creates a new Git server repository and pushes the generated app code.
+
+[source,sh,role=execute]
+----
+cat > scripts/git-push.sh << 'EOF'
+#!/usr/bin/env bash
+# Push generated app to a new Git server repository.
+# Usage: bash scripts/git-push.sh <app-name>
+set -euo pipefail
+APP=${1:-${APP_NAME:?APP_NAME not set}}
+git remote remove origin 2>/dev/null || true
+gitpop init --host "$GIT_SERVER" --name "$APP"
+git add -A
+git config user.email "${GIT_EMAIL:-dev@workshop.local}"
+git config user.name  "${GIT_NAME:-Developer}"
+git commit -m "feat: ${APP} initial implementation" 2>/dev/null || true
+git push -u origin main
+echo "Repo: $(git remote get-url origin)"
+EOF
+chmod +x scripts/git-push.sh
+----
+
+=== scripts/build-image.sh
+
+Builds the container image using an OpenShift Pipelines (Tekton) `Pipeline`.
+The pipeline clones the Git server repo, then runs `buildah` to build and push the image to the internal registry — no `oc new-build` involved.
+
+[source,sh,role=execute]
+----
+cat > scripts/build-image.sh << 'EOF'
+#!/usr/bin/env bash
+# Build container image with OpenShift Pipelines (Tekton).
+# Usage: bash scripts/build-image.sh <app-name>
+set -euo pipefail
+APP=${1:-${APP_NAME:?APP_NAME not set}}
+REPO_URL=$(git remote get-url origin)
+IMAGE="image-registry.openshift-image-registry.svc:5000/${APP}-build/${APP}:latest"
+NS="${APP}-build"
+
+oc new-project "${NS}" 2>/dev/null || oc project "${NS}"
+
+# Allow the pipeline SA to push to the internal registry
+oc policy add-role-to-user registry-editor \
+  "system:serviceaccount:${NS}:pipeline" -n "${NS}" 2>/dev/null || true
+
+# Apply the build Pipeline (git-clone + buildah tasks from Tekton Hub)
+oc apply -n "${NS}" -f - <<YAML
+apiVersion: tekton.dev/v1
+kind: Pipeline
+metadata:
+  name: build-app
+spec:
+  params:
+    - name: git-url
+      type: string
+    - name: image
+      type: string
+  workspaces:
+    - name: source
+  tasks:
+    - name: clone
+      taskRef:
+        resolver: cluster
+        params:
+          - name: kind
+            value: task
+          - name: name
+            value: git-clone
+          - name: namespace
+            value: openshift-pipelines
+      params:
+        - name: URL
+          value: \$(params.git-url)
+        - name: REVISION
+          value: main
+      workspaces:
+        - name: output
+          workspace: source
+    - name: build
+      runAfter: [clone]
+      taskRef:
+        resolver: cluster
+        params:
+          - name: kind
+            value: task
+          - name: name
+            value: buildah
+          - name: namespace
+            value: openshift-pipelines
+      params:
+        - name: IMAGE
+          value: \$(params.image)
+        - name: CONTEXT
+          value: .
+      workspaces:
+        - name: source
+          workspace: source
+YAML
+
+# Workspace PVC (reused across runs)
+oc apply -n "${NS}" -f - <<YAML
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: build-ws
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: 1Gi
+YAML
+
+# Trigger a PipelineRun
+PR=$(oc create -n "${NS}" -o jsonpath='{.metadata.name}' -f - <<YAML
+apiVersion: tekton.dev/v1
+kind: PipelineRun
+metadata:
+  generateName: build-app-
+spec:
+  serviceAccountName: pipeline
+  pipelineRef:
+    name: build-app
+  params:
+    - name: git-url
+      value: ${REPO_URL}
+    - name: image
+      value: ${IMAGE}
+  workspaces:
+    - name: source
+      persistentVolumeClaim:
+        claimName: build-ws
+YAML
+)
+
+echo "PipelineRun: ${PR}"
+oc wait pipelinerun "${PR}" -n "${NS}" --for=condition=Succeeded --timeout=600s
+echo "Image: ${IMAGE}"
+EOF
+chmod +x scripts/build-image.sh
+----
+
+=== scripts/gitops-deploy.sh
+
+Creates a *developer-owned* Argo CD instance in `${APP}-dev` — the operator is pre-installed by the Platform Engineer, but each developer runs their own instance scoped to their repository. No access to the platform `openshift-gitops` namespace required.
+
+[source,sh,role=execute]
+----
+cat > scripts/gitops-deploy.sh << 'EOF'
+#!/usr/bin/env bash
+# Deploy app via a developer-owned Argo CD instance.
+# Usage: bash scripts/gitops-deploy.sh <app-name>
+set -euo pipefail
+APP=${1:-${APP_NAME:?APP_NAME not set}}
+IMAGE="image-registry.openshift-image-registry.svc:5000/${APP}-build/${APP}:latest"
+REPO_URL=$(git remote get-url origin)
+
+oc new-project "${APP}-dev" 2>/dev/null || oc project "${APP}-dev"
+
+# Allow dev namespace to pull from build namespace
+oc policy add-role-to-user system:image-puller \
+  "system:serviceaccount:${APP}-dev:default" \
+  -n "${APP}-build" 2>/dev/null || true
+
+# Update image in manifest and push
+sed -i "s|image: .*|image: ${IMAGE}|" deploy/base/deployment.yaml
+git add deploy/base/deployment.yaml
+git commit -m "ci: update image to ${IMAGE##*@}" 2>/dev/null || true
+git push
+
+# Deploy a developer-owned Argo CD instance in the app namespace.
+# The openshift-gitops-operator (installed by the Platform Engineer) enables
+# any user to create an ArgoCD CR in their own namespace.
+oc apply -n "${APP}-dev" -f - <<YAML
+apiVersion: argoproj.io/v1beta1
+kind: ArgoCD
+metadata:
+  name: argocd
+spec:
+  server:
+    insecure: true
+    route:
+      enabled: true
+      tls:
+        termination: edge
+  applicationSet:
+    enabled: false
+  notifications:
+    enabled: false
+  sourceNamespaces:
+    - ${APP}-dev
+YAML
+
+# Wait for operator to reconcile (phase: Available) before the deployment exists
+echo "Waiting for ArgoCD CR to become Available..."
+for i in $(seq 1 30); do
+  PHASE=$(oc get argocd argocd -n "${APP}-dev" \
+    -o jsonpath='{.status.phase}' 2>/dev/null || echo "")
+  echo "  phase=${PHASE} (${i}/30)"
+  [[ "${PHASE}" == "Available" ]] && break
+  sleep 10
+done
+oc wait deployment/argocd-server -n "${APP}-dev" \
+  --for=condition=Available --timeout=120s
+
+# Create the Application — the dev Argo CD manages this namespace
+oc apply -n "${APP}-dev" -f - <<YAML
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: ${APP}
+spec:
+  project: default
+  source:
+    repoURL: ${REPO_URL}
+    targetRevision: main
+    path: deploy/base
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: ${APP}-dev
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+YAML
+
+echo "Waiting for sync..."
+for i in $(seq 1 30); do
+  SYNC=$(oc get application "${APP}" -n "${APP}-dev" \
+    -o jsonpath='{.status.sync.status}' 2>/dev/null || echo "")
+  HEALTH=$(oc get application "${APP}" -n "${APP}-dev" \
+    -o jsonpath='{.status.health.status}' 2>/dev/null || echo "")
+  echo "  sync=${SYNC} health=${HEALTH} (${i}/30)"
+  [[ "${SYNC}" == "Synced" && "${HEALTH}" == "Healthy" ]] && break
+  sleep 10
+done
+
+echo "App:    https://$(oc get route "${APP}" -n "${APP}-dev" -o jsonpath='{.spec.host}')"
+echo "ArgoCD: https://$(oc get route argocd-server -n "${APP}-dev" -o jsonpath='{.spec.host}')"
+EOF
+chmod +x scripts/gitops-deploy.sh
+----
+
+== Step 3: Write AGENTS.md
+
+`AGENTS.md` is the single source of truth for OpenCode. It contains:
+
+* Platform conventions (images, security, Kubernetes requirements)
+* The *exact* Dockerfile template — OpenCode generates this file from it
+* The deploy workflow — OpenCode calls the scripts as shell commands
+
+[source,sh,role=execute]
+----
+cat > AGENTS.md << 'EOF'
+# AGENTS.md — Go App Platform Conventions
+
+You are running inside an OpenShift DevSpace on ROSA. `oc` is authenticated.
+`$GIT_SERVER` and `$APP_NAME` are set in the terminal.
+
+## Files YOU must generate
+
+For every new application, generate these files:
+
+### main.go
+Entry point. HTTP server on port 8080. Must expose:
+- `GET /`      — the application UI or API response
+- `GET /healthz` — returns `{"status":"ok"}` (used by Kubernetes probes)
+
+### go.mod
+```
+module <app-name>
+go 1.22
+```
+
+### Dockerfile
+Use exactly this two-stage template — adapt only the `COPY` / `RUN` lines if the app has
+additional source files:
+
+```dockerfile
+FROM registry.access.redhat.com/ubi9/go-toolset:latest AS builder
+WORKDIR /tmp/build
+COPY go.mod go.sum* ./
+RUN go mod download 2>/dev/null || true
+COPY . .
+RUN CGO_ENABLED=0 go build -buildvcs=false -o /tmp/app .
+
+FROM registry.access.redhat.com/ubi9/ubi-minimal:latest
+COPY --from=builder /tmp/app /usr/local/bin/app
+USER 1001
+EXPOSE 8080
+ENTRYPOINT ["/usr/local/bin/app"]
+```
+
+Key constraints:
+- Build in `/tmp/build` (go-toolset UID 1001 cannot write to `/app`)
+- `-buildvcs=false` required (Tekton git-clone workspace lacks full git metadata)
+- `USER 1001` in image; OpenShift overrides at runtime with a namespace UID
+
+## Files already in the repository (do not regenerate)
+
+```
+deploy/base/          # Kustomize manifests — only update image: field
+scripts/
+  git-push.sh        # creates personal Git repo + pushes code
+  build-image.sh     # Tekton Pipeline: git-clone + buildah
+  gitops-deploy.sh   # spins up dev ArgoCD instance + deploys app
+```
+
+## Build verification
+
+After generating all files, always run:
+```bash
+CGO_ENABLED=0 go build -buildvcs=false -o /dev/null .
+```
+Fix any compile errors before proceeding.
+
+## Kubernetes / OpenShift requirements
+Every Deployment MUST have:
+- resources.requests: cpu 50m, memory 64Mi
+- resources.limits: cpu 200m, memory 128Mi
+- livenessProbe + readinessProbe on /healthz port 8080
+- Label app.kubernetes.io/name: <app-name>
+- Route with tls.termination: edge, insecureEdgeTerminationPolicy: Redirect
+  Do NOT set spec.host — leave it empty so OpenShift auto-generates the hostname.
+- Do NOT set runAsUser — OpenShift assigns a UID from the namespace range (restricted-v2 SCC).
+- Pod securityContext:
+    runAsNonRoot: true
+    seccompProfile:
+      type: RuntimeDefault
+- Container securityContext:
+    allowPrivilegeEscalation: false
+    capabilities:
+      drop: ["ALL"]
+    runAsNonRoot: true
+
+## In-cluster LLM service
+- Base URL : http://qwen36-predictor.llm-inference.svc.cluster.local:8080/v1
+- Model ID  : qwen36
+- API       : OpenAI-compatible
+- Always add `"chat_template_kwargs": {"enable_thinking": false}` to every request body
+
+## Deploy workflow — call the scripts as shell commands
+
+Once the build is verified, execute these commands in order using your bash tool:
+
+```bash
+bash scripts/git-push.sh $APP_NAME
+bash scripts/build-image.sh $APP_NAME      # takes 3-5 min — Tekton PipelineRun
+bash scripts/gitops-deploy.sh $APP_NAME   # takes 2-3 min — ArgoCD instance startup
+```
+
+Wait for each script to succeed before calling the next. Read the output — errors are self-explanatory.
+EOF
+----
+
+== Step 4: Write devfile.yaml
+
+The devfile exposes the three scripts as named Tasks — visible and runnable in one click from the DevSpaces Tasks panel.
+
+[source,sh,role=execute]
+----
+cat > devfile.yaml << EOF
+schemaVersion: 2.2.2
+metadata:
+  name: go-app-workspace
+  description: Go development environment with OpenCode AI assistant
+attributes:
+  controller.devfile.io/storage-type: per-user
+components:
+  - name: dev
+    container:
+      image: quay.io/devfile/universal-developer-image:latest
+      memoryRequest: 2Gi
+      memoryLimit: 6Gi
+      cpuRequest: 500m
+      cpuLimit: 2000m
+      mountSources: true
+      env:
+        - name: SHELL
+          value: /bin/bash
+        - name: GIT_SERVER
+          value: ${GIT_SERVER}
+        - name: PATH
+          value: /home/user/.opencode/bin:/home/user/.local/bin:/usr/local/go/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+commands:
+  - id: bootstrap
+    exec:
+      component: dev
+      label: "Install tools (OpenCode + gitpop)"
+      commandLine: |
+        set -e
+        curl -fsSL https://opencode.ai/install | bash
+        mkdir -p \${HOME}/.local/bin
+        curl -fsSL "\${GIT_SERVER}/dl/gitpop?os=linux&arch=amd64" \\
+          -o \${HOME}/.local/bin/gitpop
+        chmod +x \${HOME}/.local/bin/gitpop
+        echo "Bootstrap complete."
+      workingDir: \${PROJECT_SOURCE}
+  - id: git-push
+    exec:
+      component: dev
+      label: "1. Push code to Git server"
+      commandLine: bash scripts/git-push.sh \${APP_NAME:-fortune-cookie}
+      workingDir: \${PROJECT_SOURCE}
+  - id: build-image
+    exec:
+      component: dev
+      label: "2. Build container image"
+      commandLine: bash scripts/build-image.sh \${APP_NAME:-fortune-cookie}
+      workingDir: \${PROJECT_SOURCE}
+  - id: gitops-deploy
+    exec:
+      component: dev
+      label: "3. Deploy with Argo CD"
+      commandLine: bash scripts/gitops-deploy.sh \${APP_NAME:-fortune-cookie}
+      workingDir: \${PROJECT_SOURCE}
+events:
+  postStart:
+    - bootstrap
+EOF
+----
+
+== Step 5: Write opencode.json
+
+[source,sh,role=execute]
+----
+cat > opencode.json << 'EOF'
+{
+  "$schema": "https://opencode.ai/config.json",
+  "provider": {
+    "qwen36": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "Qwen3.6",
+      "options": {
+        "baseURL": "http://qwen36-predictor.llm-inference.svc.cluster.local:8080/v1",
+        "apiKey": "dummy",
+        "chunkTimeout": 120000,
+        "timeout": 600000
+      },
+      "models": {
+        "qwen36": {
+          "name": "qwen36",
+          "reasoning": true,
+          "tool_call": true,
+          "interleaved": { "field": "reasoning_content" },
+          "limit": { "context": 32768, "output": 8192 }
+        }
+      }
+    }
+  },
+  "model": "qwen36/qwen36",
+  "agent": {
+    "plan": { "temperature": 0.1 },
+    "build": { "temperature": 0.6 }
+  },
+  "autoupdate": false,
+  "instructions": ["AGENTS.md"]
+}
+EOF
+----
+
+== Step 5b: Add Kustomize Manifests
+
+Including placeholder Kustomize manifests in the template ensures they always exist. The LLM generates `main.go`, `go.mod`, and `Dockerfile` — the platform scaffold is always present.
+
+[NOTE]
+====
+The new `AGENTS.md` already tells the LLM: *"The deploy/base/ manifests are already present — do not regenerate them."* The manifests committed here are the ones the LLM will update (only the `image:` field in `deployment.yaml`).
+====
+
+[source,sh,role=execute]
+----
+mkdir -p deploy/base
+
+cat > deploy/base/kustomization.yaml << 'EOF'
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - deployment.yaml
+  - service.yaml
+  - route.yaml
+EOF
+
+cat > deploy/base/deployment.yaml << 'EOF'
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: fortune-cookie
+  labels:
+    app.kubernetes.io/name: fortune-cookie
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: fortune-cookie
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: fortune-cookie
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: fortune-cookie
+          image: PLACEHOLDER
+          ports:
+            - containerPort: 8080
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 128Mi
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
+            initialDelaySeconds: 5
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
+            initialDelaySeconds: 3
+          securityContext:
+            allowPrivilegeEscalation: false
+            runAsNonRoot: true
+            capabilities:
+              drop: ["ALL"]
+EOF
+
+cat > deploy/base/service.yaml << 'EOF'
+apiVersion: v1
+kind: Service
+metadata:
+  name: fortune-cookie
+spec:
+  selector:
+    app.kubernetes.io/name: fortune-cookie
+  ports:
+    - port: 8080
+      targetPort: 8080
+EOF
+
+cat > deploy/base/route.yaml << 'EOF'
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: fortune-cookie
+spec:
+  to:
+    kind: Service
+    name: fortune-cookie
+  port:
+    targetPort: 8080
+  tls:
+    termination: edge
+    insecureEdgeTerminationPolicy: Redirect
+EOF
+----
+
+== Step 6: Commit and Push to the Git Server
+
+[source,sh,role=execute]
+----
+git add .
+git commit -m "feat: Go app template with OpenCode + Qwen3.6 conventions"
+gitpop init --host $GIT_SERVER --name go-app-template
+git push
+----
+
+Save the DevSpaces launcher URL to share with participants:
+
+[source,sh,role=execute]
+----
+TEMPLATE_URL=$(git remote get-url origin)
+DEVSPACES_URL=$(oc get checluster devspaces -n openshift-operators \
+  -o jsonpath='{.status.cheURL}')
+
+echo "============================================"
+echo " Participant workspace URL:"
+echo "  $DEVSPACES_URL/#$TEMPLATE_URL"
+echo "============================================"
+----
+
+When a developer opens that URL, Dev Spaces creates a workspace from the devfile, installs OpenCode and gitpop, and exposes the three deploy tasks in the Tasks panel.
+
+[TIP]
+====
+The *Tasks panel* in DevSpaces (sidebar → rocket icon) shows all `commands` from the devfile. Developers see:
+
+* *1. Push code to Git server* — `git-push`
+* *2. Build container image* — `build-image`
+* *3. Deploy with Argo CD* — `gitops-deploy`
+
+OpenCode generates the app. The developer clicks the tasks in order to ship it.
+====
+
+image::cicd-gitops.png[GitOps Delivery Pipeline, align="center"]
+
+== Module 200 Complete
+
+As the Platform Engineer, you have deployed and configured the full developer platform:
+
+[cols="1,2", options="header"]
+|===
+| Component | Status
+
+| GPU Machine Pool (autoscaled)
+| ✅ Provisioned in ROSA
+
+| OpenShift AI + NVIDIA GPU Operator + NFD + Dev Spaces
+| ✅ All operators running
+
+| OpenShift GitOps (Argo CD) + OpenShift Pipelines (Tekton)
+| ✅ Installed via gitops-catalog; workshop `AppProject` configured
+
+| Qwen3.6 InferenceService
+| ✅ Ready, OpenAI-compatible API available in-cluster
+
+| Go app template (AGENTS.md + scripts/ + devfile + opencode.json)
+| ✅ Published to the Git server; developer URL ready to share
+|===
+
+Switch persona — move on to *Module 300: Developer Experience*.

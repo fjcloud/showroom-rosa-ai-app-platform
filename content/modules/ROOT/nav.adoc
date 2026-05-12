@@ -1,35 +1,27 @@
 *Introduction*
 
-* xref:100-setup/lab_1_explore_rosa.adoc[Explore the ROSA environment]
-* xref:100-setup/lab_2_cluster_creation.adoc[Create a ROSA cluster]
-// * xref: 100-setup/lab_3_cluster_creation_hcp.adoc[Create a ROSA cluster with Hosted Control Planes]
-* xref:100-setup/lab_4_access_cluster.adoc[Access your ROSA cluster]
+* xref:index.adoc[Workshop Overview]
+* xref:100-setup/lab_1_access_rosa.adoc[Access Your ROSA Cluster]
 
-*Basic Operational Tasks*
+*Platform Engineer: LLM as a Service & Dev Platform*
 
-* xref:200-ops/lab_1_cluster_upgrades.adoc[Upgrade your ROSA cluster]
-* xref:200-ops/lab_2_managing_worker_nodes.adoc[Managing Worker Nodes]
-* xref:200-ops/lab_3_autoscaling.adoc[Autoscale your ROSA Cluster]
-* xref:200-ops/lab_4_labeling_nodes.adoc[Labeling your Worker Nodes]
-* xref:200-ops/lab_5_configure_idp_cognito.adoc[Configure AWS Cognito IDP for ROSA]
-* xref:200-ops/lab_6_cloudwatch.adoc[Configure Red Hat OpenShift Logging with AWS Cloudwatch]
+* xref:200-platform/lab_1_gpu_machinepool.adoc[Deploy a Scalable GPU Machine Pool]
+* xref:200-platform/lab_2_operators.adoc[Install Platform Operators]
+* xref:200-platform/lab_3_openshift_ai_overview.adoc[Discover OpenShift AI]
+* xref:200-platform/lab_4_llm_service.adoc[Deploy LLM as a Service]
+* xref:200-platform/lab_5_agents_md.adoc[Define Developer Conventions]
 
-*Deploy an Application to ROSA*
+*Developer: Build & Ship with AI*
 
-* xref:300-apps/lab_1_deploy_app.adoc[Deploy an application with AWS Database]
-* xref:300-apps/lab_2_openshift_gitops.adoc[Deploy an application with Red Hat OpenShift GitOps]
-* xref:300-apps/lab_3_network_policy.adoc[Secure your applications with Network Policies]
-* xref:300-apps/lab_4_resilient_app.adoc[Make your application resilient]
-// * xref:300-apps/lab_5_cicd.adoc[Deploy your application using CI/CD]
+* xref:300-developer/lab_1_devspace_launch.adoc[Launch Your Dev Space]
+* xref:300-developer/lab_3_opencode_dev.adoc[Build with OpenCode: Plan → Build → Deploy]
+* xref:300-developer/lab_4_cicd.adoc[Ship It: Pipelines + GitOps]
+* xref:300-developer/lab_5_validate.adoc[Validate Best Practices with OpenCode]
 
-*Red Hat OpenShift Service Mesh*
+*LLM Observability & Governance*
 
-* xref:400-service-mesh/lab_1_service_mesh_introduction.adoc[Service Mesh Introduction]
-* xref:400-service-mesh/lab_2_service_mesh_deploy_operator.adoc[Install Service Mesh Operator]
-* xref:400-service-mesh/lab_3_service_mesh_deploy_control_plane.adoc[Deploy Service Mesh Control Plane]
-* xref:400-service-mesh/lab_4_service_mesh_deploy_app.adoc[Deploy a Service Mesh example application]
-* xref:400-service-mesh/lab_5_service_mesh_observe.adoc[Configure and observe Service Mesh traffic]
+* xref:400-observability/lab_1_llm_metrics.adoc[LLM Metrics & GPU Monitoring]
 
-*Conclusion and What's Next*
+*Conclusion*
 
 * xref:conclusion.adoc[Conclusion & What's Next]

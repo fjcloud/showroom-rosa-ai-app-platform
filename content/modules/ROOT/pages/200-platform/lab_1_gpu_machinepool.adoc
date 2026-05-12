@@ -1,0 +1,130 @@
+= Deploy a Scalable GPU Machine Pool
+
+In this lab, you will add a GPU-backed machine pool to your ROSA cluster. This pool will host the NVIDIA L40S GPUs that power the Qwen3.6 inference service. Unlike a fixed-size pool, you will configure *autoscaling* so that ROSA provisions GPU nodes on demand and releases them when idle — no manual capacity planning needed.
+
+[NOTE]
+====
+*Estimated time:* 15 minutes (5 min active + ~10 min wait) +
+*Persona:* Platform Engineer +
+*Fire and forget:* Trigger this lab first, then move on. The GPU node will be ready by the time you need it.
+====
+
+[IMPORTANT]
+====
+GPU nodes are expensive. The `g6e.xlarge` instance (NVIDIA L40S, 48 GB VRAM) costs approximately $1.65/hr on AWS. The autoscaler will scale back to `min-replicas 1` when the inference service is idle, keeping costs controlled.
+====
+
+== Understanding ROSA Machine Pools
+
+A *machine pool* is a group of worker nodes with a shared configuration (instance type, labels, taints). ROSA manages the lifecycle of these nodes — provisioning, replacing failed nodes, and scaling — so you don't have to interact with AWS EC2 directly.
+
+Key parameters for the GPU pool:
+
+[cols="1,2", options="header"]
+|===
+| Parameter | Value & Rationale
+
+| `--instance-type g6e.xlarge`
+| 1× NVIDIA L40S GPU (48 GB VRAM), suitable for serving Qwen3.6-35B quantized (AWQ 4-bit)
+
+| `--enable-autoscaling`
+| ROSA scales nodes automatically based on pending pod requests
+
+| `--min-replicas 1`
+| Always keep one warm GPU node — avoids cold-start delay during the workshop
+
+| `--max-replicas 3`
+| Headroom for concurrent participants; KServe scales predictor pods across available GPU nodes
+
+| `--taints nvidia.com/gpu=present:NoSchedule`
+| Prevents non-GPU workloads (dev pods, build pods) from landing on expensive GPU nodes
+|===
+
+== Create the GPU Machine Pool
+
+. Set the cluster name variable (should already be in your shell from Module 100):
++
+[source,sh,role=execute]
+----
+echo "Cluster: $CLUSTER_NAME  AZ: $AWS_AZ"
+----
++
+.Expected Output
+[source,text,options=nowrap]
+----
+Cluster: rosa-abc12  AZ: eu-west-1a
+----
++
+[WARNING]
+====
+If either variable is empty, run: `source $HOME/.bashrc`
+====
+
+. Create the GPU machine pool with autoscaling enabled:
++
+[source,sh,role=execute]
+----
+rosa create machine-pool \
+  --cluster $CLUSTER_NAME \
+  --name gpu \
+  --enable-autoscaling \
+  --min-replicas 1 \
+  --max-replicas 3 \
+  --instance-type g6e.xlarge \
+  --availability-zone $AWS_AZ \
+  --taints 'nvidia.com/gpu=present:NoSchedule'
+----
++
+.Sample Output
+[source,text,options=nowrap]
+----
+I: Machine pool 'gpu' created successfully on cluster 'rosa-abc12'
+I: To view all machine pools, run 'rosa list machinepools -c rosa-abc12'
+----
+
+. Start a background wait for the GPU node to become Ready. This runs in the background — you will continue working on other labs while it completes:
++
+[source,sh,role=execute]
+----
+oc wait node -l node.kubernetes.io/instance-type=g6e.xlarge \
+  --for=condition=Ready --timeout=600s &
+echo "GPU node wait started in background (PID $!)"
+----
+
+== Verify in the OCM Console
+
+[NOTE]
+====
+This is a great moment to show the *ROSA-specific value*: a single CLI command triggered an automated AWS EC2 provisioning workflow managed entirely by Red Hat's OCM service.
+====
+
+. Open the Red Hat Hybrid Cloud Console:
++
+https://console.redhat.com/openshift/[console.redhat.com/openshift, window=_blank]
+
+. Navigate to your cluster → *Machine pools* tab.
+
+. You should see the `gpu` machine pool listed with:
+** Status: *Provisioning*
+** Autoscaling: Enabled (min: 1, max: 3)
+** Instance type: `g6e.xlarge`
+
+image::machinepools-gpu.png[GPU Machine Pool Architecture, align="center"]
+
+== ✅ Checkpoint
+
+[source,sh,role=execute]
+----
+rosa list machinepools --cluster $CLUSTER_NAME
+----
+
+.Sample Output
+[source,text,options=nowrap]
+----
+ID   AUTOSCALING  REPLICAS  INSTANCE TYPE  LABELS  TAINTS                              AVAILABILITY ZONES  SUBNETS  SPOT  DISK SIZE  SG IDs
+gpu  Yes          1/1-3     g6e.xlarge             nvidia.com/gpu=present:NoSchedule   eu-west-1a
+----
+
+The `gpu` machine pool is created. ✓
+
+➡️ Move immediately to the next lab. *Do not wait for the node* — it will be ready by the time you need it.

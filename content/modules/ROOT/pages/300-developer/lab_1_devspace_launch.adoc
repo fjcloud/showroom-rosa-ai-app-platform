@@ -1,0 +1,194 @@
+= Launch Your Dev Space
+
+Welcome to Module 300. You are now the *Developer*. Everything you need — a code editor, a terminal, the OpenCode AI assistant, and a direct connection to the in-cluster Qwen3.6 LLM — is available in your browser through *OpenShift Dev Spaces*. No local installation required.
+
+[NOTE]
+====
+*Estimated time:* 10 minutes +
+*Persona:* Developer +
+*What you need:* Your OpenShift web console credentials (from Module 100)
+====
+
+== What is OpenShift Dev Spaces?
+
+OpenShift Dev Spaces provides *cloud-based developer workspaces* — VS Code-compatible IDEs that run as pods in the cluster. Key benefits:
+
+* *Zero local setup:* the workspace comes pre-configured; just open a browser
+* *Consistent environment:* every developer gets the same tools, versions, and configuration
+* *In-cluster access:* your workspace runs inside the cluster, so it can reach internal services like `qwen36-predictor.llm-inference.svc.cluster.local` directly — no VPN, no port-forward needed
+* *Persistent storage:* your work is saved on a per-user PVC even if you close the browser
+
+== Get the Dev Spaces URL
+
+Your instructor will give you the *template repository URL* from the Git server (created by the Platform Engineer in Lab 200-5). Build the Dev Spaces launcher URL:
+
+[source,sh,role=execute,subs=attributes]
+----
+export TEMPLATE_URL={template_repo_url}
+export APP_NAME=fortune-cookie
+
+DEVSPACES_URL=$(oc get checluster devspaces \
+  -n openshift-operators \
+  -o jsonpath='{.status.cheURL}')
+
+echo "${DEVSPACES_URL}/#${TEMPLATE_URL}"
+----
+
+.Sample Output
+[source,text,options=nowrap]
+----
+https://devspaces.apps.rosa-abc12.example.openshiftapps.com/#https://gitpop.example.com/0xabc.../go-app-template
+----
+
+[NOTE]
+====
+The `#<template-url>` suffix tells Dev Spaces to clone the Platform Engineer's template and create a workspace from its `devfile.yaml`. The template already contains `AGENTS.md`, `opencode.json`, `scripts/`, and `deploy/base/` — you only need to write the application code.
+====
+
+. Open the printed URL in your browser.
+
+== Log In and Create Your Workspace
+
+. You will be redirected to OpenShift SSO. Log in with your cluster credentials:
+** Username: `{rosa_openshift_admin_user}`
+** Password: `{rosa_openshift_admin_password}`
+
+. Dev Spaces will create a workspace automatically from the devfile. You will see a progress screen:
++
+[source,text]
+----
+Starting workspace...
+Pulling universal developer image...
+Running postStart commands...
+  ✓ Installing OpenCode CLI
+----
++
+This takes approximately 2-3 minutes on first launch. *Subsequent launches are faster* — the image is cached.
+
+. When the workspace is ready, a VS Code-like editor opens in the browser. You will see:
+** A file explorer on the left
+** A terminal at the bottom
+** The OpenCode panel (if the CLI started automatically)
+
+== Verify OpenCode is Running
+
+. Open a terminal in the workspace (*Terminal → New Terminal* or press kbd:[Ctrl+`]).
+
+. Check that OpenCode was installed by the `postStart` hook:
++
+[source,sh,role=execute]
+----
+opencode --version
+----
++
+.Sample Output
+[source,text,options=nowrap]
+----
+opencode v0.x.x
+----
+
+. Verify OpenCode can reach the in-cluster LLM:
++
+[source,sh,role=execute]
+----
+curl -s \
+  http://qwen36-predictor.llm-inference.svc.cluster.local:8080/v1/models \
+  | python3 -m json.tool
+----
++
+.Expected Output
+[source,json,options=nowrap]
+----
+{
+  "object": "list",
+  "data": [
+    {
+      "id": "qwen36",
+      "object": "model",
+      "owned_by": "vllm"
+    }
+  ]
+}
+----
++
+[TIP]
+====
+This request works because your Dev Space pod runs *inside the cluster*. The URL `qwen36-predictor.llm-inference.svc.cluster.local` is only reachable from within the cluster — your workspace has direct network access to the LLM, with no latency penalty from going over the internet.
+====
+
+. Start OpenCode:
++
+[source,sh,role=execute]
+----
+opencode
+----
++
+The OpenCode TUI (Terminal UI) launches. You should see two agents listed:
+** *plan* — temperature 0.1, focused reasoning for architecture and planning
+** *build* — temperature 0.6, creative code generation
+
+Press `Tab` to switch between agents. Press `q` to exit OpenCode when needed.
+
+== Understanding the OpenCode Configuration
+
+The workspace comes pre-configured via `opencode.json`:
+
+[source,json]
+----
+{
+  "$schema": "https://opencode.ai/config.json",
+  "provider": {
+    "qwen36": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "Qwen3.6-35B-A3B-AWQ",
+      "options": {
+        "baseURL": "http://qwen36-predictor.llm-inference.svc.cluster.local:8080/v1",
+        "apiKey": "dummy",
+        "chunkTimeout": 120000,
+        "timeout": 600000
+      },
+      "models": {
+        "qwen36": {
+          "name": "Qwen3.6-35B-A3B-AWQ-4bit",
+          "reasoning": true,
+          "tool_call": true,
+          "interleaved": { "field": "reasoning_content" },
+          "limit": {
+            "context": 262144,
+            "output": 32768
+          }
+        }
+      }
+    }
+  },
+  "model": "qwen36/qwen36",
+  "agent": {
+    "plan": { "temperature": 0.1 },
+    "build": { "temperature": 0.6 }
+  },
+  "autoupdate": false,
+  "instructions": ["AGENTS.md"] <1>
+}
+----
+
+<1> OpenCode reads `AGENTS.md` from the current project directory at the start of every session. This is how the Platform Engineer's rules are silently enforced.
+
+== ✅ Checkpoint
+
+[source,sh,role=execute]
+----
+opencode --version && \
+curl -s http://qwen36-predictor.llm-inference.svc.cluster.local:8080/v1/models | \
+  python3 -c "import sys,json; m=json.load(sys.stdin); print('LLM ready:', m['data'][0]['id'])"
+----
+
+.Expected Output
+[source,text,options=nowrap]
+----
+1.14.x
+LLM ready: qwen36
+----
+
+Your Dev Space is running and connected to the in-cluster LLM. ✓
+
+➡️ Move on to *Lab 3: Build and Deploy with OpenCode*.

@@ -1,0 +1,236 @@
+= Validate Best Practices with OpenCode
+
+Your application is live. But did OpenCode actually follow all the platform rules from `AGENTS.md`? Use the same LLM that wrote the code to *audit* it — and automatically fix any gaps.
+
+[NOTE]
+====
+*Estimated time:* 10 minutes +
+*Persona:* Developer +
+*The punchline:* The model that generated your app can also police it.
+====
+
+== Why This Matters
+
+In traditional platform governance:
+
+* Platform team writes a checklist → developers ignore it
+* Platform team adds a CI linter → developers work around it
+* Platform team holds code reviews → bottleneck, friction, slow
+
+With an AI-native platform:
+
+* `AGENTS.md` defines the rules
+* OpenCode follows them when generating code (proactive)
+* OpenCode audits them when asked (reactive)
+* The developer never reads documentation — the model does
+
+[TIP]
+====
+*Governance as a conversation.* Instead of "your PR failed the security check", it becomes "ask the model to verify and fix". The outcome is identical (compliant code), but the experience is radically better.
+====
+
+== Open OpenCode
+
+[source,sh,role=execute]
+----
+cd ~/fortune-cookie
+opencode
+----
+
+Switch to the *build* agent (press kbd:[Tab] until you see `build`). The build agent modifies files; the plan agent only describes.
+
+== Audit 1: Resource Governance
+
+[source,text,role=execute]
+----
+/build
+
+Review deploy/base/deployment.yaml. Verify that all containers have CPU and memory
+requests and limits set exactly as specified in AGENTS.md:
+  - requests: cpu 50m,  memory 64Mi
+  - limits:   cpu 200m, memory 128Mi
+
+If any values are missing or incorrect, fix them now and show me the corrected section.
+----
+
+If OpenCode patches the file:
+
+[source,sh,role=execute]
+----
+bash scripts/git-push.sh $APP_NAME
+bash scripts/build-image.sh $APP_NAME
+bash scripts/gitops-deploy.sh $APP_NAME
+----
+
+== Audit 2: Observability
+
+[source,text,role=execute]
+----
+Verify that the Deployment in deploy/base/deployment.yaml has both a liveness probe
+and a readiness probe configured:
+  - livenessProbe:  HTTP GET /healthz on port 8080, initialDelaySeconds 5
+  - readinessProbe: HTTP GET /healthz on port 8080, initialDelaySeconds 3
+
+If either probe is missing or has wrong values, add or correct them.
+----
+
+Verify the probes are working after re-deploy:
+
+[source,sh,role=execute]
+----
+ROUTE=$(oc get route $APP_NAME -n ${APP_NAME}-dev -o jsonpath='{.spec.host}')
+curl -s https://${ROUTE}/healthz
+----
+
+.Expected
+[source,json,options=nowrap]
+----
+{"status":"ok"}
+----
+
+== Audit 3: Security & TLS
+
+[source,text,role=execute]
+----
+Perform a security and TLS audit of deploy/base/:
+
+1. Deployment: verify the pod securityContext sets runAsNonRoot: true and
+   seccompProfile.type: RuntimeDefault.
+   Verify the container securityContext sets allowPrivilegeEscalation: false,
+   capabilities.drop: ["ALL"], runAsNonRoot: true.
+   Do NOT add runAsUser — OpenShift assigns a UID from the namespace range automatically.
+
+2. Route: verify TLS termination is edge with insecureEdgeTerminationPolicy: Redirect.
+   Verify spec.host is NOT set (leave it empty — OpenShift auto-generates the hostname).
+
+Apply all fixes.
+----
+
+Verify the security context on the running pod:
+
+[source,sh,role=execute]
+----
+oc get pod -n ${APP_NAME}-dev -l app.kubernetes.io/name=$APP_NAME \
+  -o jsonpath='{.items[0].spec.securityContext}' | python3 -m json.tool
+----
+
+.Expected
+[source,json,options=nowrap]
+----
+{
+  "runAsNonRoot": true,
+  "seccompProfile": { "type": "RuntimeDefault" }
+}
+----
+
+Note: `runAsUser` is *absent* — OpenShift assigned a UID from the namespace range (typically `1000990000+`). This is `restricted-v2` SCC compliance.
+
+Verify Route TLS:
+
+[source,sh,role=execute]
+----
+oc get route $APP_NAME -n ${APP_NAME}-dev \
+  -o jsonpath='{.spec.tls.termination}'
+----
+
+.Expected
+[source,text,options=nowrap]
+----
+edge
+----
+
+== Final State Check
+
+[source,sh,role=execute]
+----
+echo "=== Resource Limits ==="
+oc get deployment $APP_NAME -n ${APP_NAME}-dev \
+  -o jsonpath='{.spec.template.spec.containers[0].resources}' | python3 -m json.tool
+
+echo ""
+echo "=== Health Probes ==="
+oc get deployment $APP_NAME -n ${APP_NAME}-dev \
+  -o jsonpath='{.spec.template.spec.containers[0].livenessProbe.httpGet}' | python3 -m json.tool
+
+echo ""
+echo "=== Pod Security Context ==="
+oc get deployment $APP_NAME -n ${APP_NAME}-dev \
+  -o jsonpath='{.spec.template.spec.securityContext}' | python3 -m json.tool
+
+echo ""
+echo "=== Route TLS ==="
+oc get route $APP_NAME -n ${APP_NAME}-dev \
+  -o jsonpath='{.spec.tls.termination}' && echo
+----
+
+.Expected (fully compliant)
+[source,text,options=nowrap]
+----
+=== Resource Limits ===
+{
+  "limits": { "cpu": "200m", "memory": "128Mi" },
+  "requests": { "cpu": "50m", "memory": "64Mi" }
+}
+
+=== Health Probes ===
+{ "path": "/healthz", "port": 8080 }
+
+=== Pod Security Context ===
+{ "runAsNonRoot": true, "seccompProfile": { "type": "RuntimeDefault" } }
+
+=== Route TLS ===
+edge
+----
+
+== The Closing Narrative
+
+[cols="1,2", options="header"]
+|===
+| Who | What They Did
+
+| Platform Engineer
+| Wrote `AGENTS.md` — a machine-readable rulebook for how apps must run on ROSA
+
+| OpenCode (generating)
+| Read `AGENTS.md` before writing any code. Applied rules proactively.
+
+| OpenCode (auditing)
+| Re-read `AGENTS.md`, compared it against the actual manifests, found gaps, fixed them.
+
+| Developer
+| Never read a runbook. Never opened a checklist. Just talked to the model.
+|===
+
+The governance is real — the running pod has the right security context, probes, and resource limits. The route is encrypted. But the developer experience was conversational, not bureaucratic.
+
+*This is AI-native platform engineering.*
+
+== Module 300 Complete 🎉
+
+[cols="1,2", options="header"]
+|===
+| Achievement | Status
+
+| Dev Space launched, OpenCode connected to in-cluster LLM
+| ✅
+
+| Fortune Cookie app generated live by OpenCode + Qwen3.6
+| ✅ (`main.go`, `go.mod`, `Dockerfile` — all from a prompt)
+
+| Binary compiled and verified locally before pushing
+| ✅
+
+| Container image built via OpenShift Pipelines (Tekton)
+| ✅
+
+| App deployed via personal Argo CD instance (GitOps)
+| ✅
+
+| Platform compliance verified and auto-fixed by OpenCode
+| ✅
+
+| App live at public HTTPS route
+| ✅
+|===
+
+➡️ Move on to *Module 400: LLM Observability & Governance*.

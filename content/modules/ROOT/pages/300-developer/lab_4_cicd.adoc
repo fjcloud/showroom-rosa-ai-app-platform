@@ -1,0 +1,147 @@
+= Ship It: Change → Build → Deploy
+
+Your Fortune Cookie app is live. Now close the GitOps loop: make a change, push it, and watch the pipeline rebuild the image and Argo CD reconcile the deployment — without running a single deployment command manually.
+
+[NOTE]
+====
+*Estimated time:* 15 minutes +
+*Persona:* Developer +
+*What you learn:* How a code change flows from `git push` to a live new version
+====
+
+== The Delivery Loop
+
+[source]
+----
+ Code change (OpenCode)
+       │
+       ▼
+ git-push.sh       → pushes to personal Git repo
+       │
+       ▼
+ build-image.sh    → Tekton Pipeline: git-clone + buildah → new image in registry
+       │
+       ▼
+ gitops-deploy.sh  → updates image in deployment.yaml → Argo CD syncs → new pods
+       │
+       ▼
+ Live at https://<app>-<namespace>.apps.<cluster>
+----
+
+You own the code. The three scripts — and the platform behind them — own the delivery.
+
+== Step 1: Make a Change with OpenCode
+
+Open OpenCode in your project directory:
+
+[source,sh,role=execute]
+----
+cd ~/fortune-cookie
+opencode
+----
+
+Ask the build agent to add something:
+
+[source,text,role=execute]
+----
+/build
+
+Add 10 more fortune cookie messages to the slice in main.go.
+Make the HTML page display the fortune in a styled card with a cookie emoji 🥠.
+After making the changes, verify the build:
+  CGO_ENABLED=0 go build -buildvcs=false -o /dev/null .
+----
+
+Wait for OpenCode to confirm the build is clean.
+
+== Step 2: Push, Build, Deploy
+
+Run the three scripts in order — same as before, no new concepts:
+
+[source,sh,role=execute]
+----
+# 1. Push the updated code
+bash scripts/git-push.sh $APP_NAME
+----
+
+[source,sh,role=execute]
+----
+# 2. Rebuild the container image (Tekton PipelineRun, ~3-5 min)
+bash scripts/build-image.sh $APP_NAME
+----
+
+[TIP]
+====
+You can watch the Tekton PipelineRun in the OpenShift console:
+*Pipelines → PipelineRuns* in the `fortune-cookie-build` namespace.
+====
+
+[source,sh,role=execute]
+----
+# 3. Update the image reference and let Argo CD sync
+bash scripts/gitops-deploy.sh $APP_NAME
+----
+
+`gitops-deploy.sh` updates the `image:` field in `deploy/base/deployment.yaml`, commits and pushes it, then Argo CD detects the change and reconciles the deployment automatically.
+
+== Step 3: Verify Argo CD Synced the Change
+
+[source,sh,role=execute]
+----
+oc get application $APP_NAME -n ${APP_NAME}-dev \
+  -o jsonpath='{.status.sync.status} / {.status.health.status}' && echo
+----
+
+.Expected
+[source,text,options=nowrap]
+----
+Synced / Healthy
+----
+
+Check the deployment rolled out cleanly:
+
+[source,sh,role=execute]
+----
+oc rollout status deployment/$APP_NAME -n ${APP_NAME}-dev --timeout=120s
+----
+
+== Step 4: Verify the Live Application
+
+[source,sh,role=execute]
+----
+ROUTE=$(oc get route $APP_NAME -n ${APP_NAME}-dev -o jsonpath='{.spec.host}')
+echo "https://${ROUTE}"
+curl -sk https://${ROUTE}/healthz
+----
+
+Open the URL in your browser — you should see the cookie emoji 🥠 and the new fortunes.
+
+[TIP]
+====
+Open the Argo CD console to see the sync history and resource tree:
+
+[source,sh,role=execute]
+----
+echo "https://$(oc get route argocd-server -n ${APP_NAME}-dev -o jsonpath='{.spec.host}')"
+----
+====
+
+== What Just Happened
+
+[cols="1,2", options="header"]
+|===
+| Script | Platform action
+
+| `git-push.sh`
+| Updated code committed and pushed to your personal Git repo
+
+| `build-image.sh`
+| Tekton cloned the repo, `buildah` rebuilt the image from your `Dockerfile`, pushed to the internal registry
+
+| `gitops-deploy.sh`
+| Updated `image:` in `deployment.yaml`, pushed to Git. Argo CD detected the commit, applied the manifest, Kubernetes rolled out new pods.
+|===
+
+You made one change. The platform delivered it — zero manual `kubectl apply`, zero interaction with the registry, zero cluster-admin access.
+
+➡️ Move on to *Lab 5: Validate Best Practices with OpenCode*.

@@ -1,6 +1,6 @@
 ---
 site:
-  title: ROSA Workshop
+  title: AI-Powered Developer Platform on ROSA
   start_page: modules::index.adoc
 
 content:
